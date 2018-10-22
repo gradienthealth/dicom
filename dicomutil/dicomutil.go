@@ -23,6 +23,7 @@ var (
 	extractImages       = flag.Bool("extract-images", false, "Extract images into separate files")
 	extractImagesStream = flag.Bool("extract-images-stream", false, "Extract images using frame streaming capability")
 	verbose             = flag.Bool("verbose", false, "Activate high verbosity log operation")
+	extractOnlyFrame    = flag.Int("extract-only-frame", -1, "Extract only this frame")
 )
 
 // FrameBufferSize represents the size of the *Frame buffered channel for streaming calls
@@ -47,7 +48,35 @@ func main() {
 
 	var parsedData *dicom.DataSet
 
-	if *extractImagesStream {
+	if *extractOnlyFrame >= 0 {
+		log.Println(*extractOnlyFrame)
+		p, err := dicom.NewParserFromFile(path, nil)
+		if err != nil {
+			log.Panic("error creating parser", err)
+		}
+
+		parsedData, err = p.Parse(dicom.ParseOptions{OnlyFetchFrameIndex: *extractOnlyFrame, OnlyFetchFrame: true,
+			ReturnTags: []dicomtag.Tag{
+				dicomtag.Rows,
+				dicomtag.Columns,
+				dicomtag.SamplesPerPixel,
+				dicomtag.BitsAllocated,
+				dicomtag.NumberOfFrames,
+				dicomtag.PixelData,
+			}})
+
+		if err != nil {
+			log.Panic("error parsing", err)
+		}
+		pd, err := parsedData.FindElementByTag(dicomtag.PixelData)
+		pixelData := pd.Value[0].(dicom.PixelDataInfo)
+		var wg sync.WaitGroup
+		wg.Add(1)
+		generateImage(&pixelData.Frames[0], *extractOnlyFrame, &wg)
+		wg.Wait()
+		log.Println(len(pixelData.Frames))
+
+	} else if *extractImagesStream {
 		// Stream process frames as they become available:
 		frameChannel := make(chan *dicom.Frame, FrameBufferSize)
 		p, err := dicom.NewParserFromFile(path, frameChannel)

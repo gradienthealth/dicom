@@ -10,10 +10,11 @@ import (
 	"strconv"
 	"strings"
 
+	"bufio"
+
 	"github.com/gradienthealth/dicom/dicomio"
 	"github.com/gradienthealth/dicom/dicomlog"
 	"github.com/gradienthealth/dicom/dicomtag"
-	"bufio"
 )
 
 // GoDICOMImplementationClassUIDPrefix defines the UID prefix for
@@ -241,15 +242,26 @@ func (p *parser) ParseNext(options ParseOptions) *Element {
 				return nil // TODO(suyash) investigate error handling in this library
 			}
 
-			image, _, err := readNativeFrames(p.decoder, p.parsedElements, p.frameChannel)
+			if options.OnlyFetchFrame {
+				image, err := readNativeFrame(p.decoder, p.parsedElements, options.OnlyFetchFrameIndex)
+				if err != nil {
+					p.decoder.SetError(err)
+					dicomlog.Vprintf(1, "dicom.ReadElement: Error reading native frames")
+					return nil
+				}
+				data = append(data, *image)
+			} else {
+				// Fetch all frames
+				image, _, err := readNativeFrames(p.decoder, p.parsedElements, p.frameChannel)
 
-			if err != nil {
-				p.decoder.SetError(err)
-				dicomlog.Vprintf(1, "dicom.ReadElement: Error reading native frames")
-				return nil
+				if err != nil {
+					p.decoder.SetError(err)
+					dicomlog.Vprintf(1, "dicom.ReadElement: Error reading native frames")
+					return nil
+				}
+				data = append(data, *image)
 			}
 
-			data = append(data, *image)
 		}
 	} else if vr == "SQ" {
 		// Note: when reading subitems inside sequence or item, we ignore
@@ -496,6 +508,13 @@ type ParseOptions struct {
 	// (bulk images) in ReadDataSet.
 	DropPixelData bool
 
+	// OnlyFetchFrame indicates only the frame at index OnlyFetchFrameIndex should be parsed and returned
+	OnlyFetchFrame bool
+
+	// OnlyFetchFrameIndex will cause only this frame index to be parsed and returned
+	// TODO: allow a range of frames to be selected if that would be useful to others
+	OnlyFetchFrameIndex int
+
 	// ReturnTags is a whitelist of tags to return.
 	ReturnTags []dicomtag.Tag
 
@@ -514,6 +533,97 @@ func getTransferSyntax(ds *DataSet) (bo binary.ByteOrder, implicit dicomio.IsImp
 		return nil, dicomio.UnknownVR, err
 	}
 	return dicomio.ParseTransferSyntaxUID(transferSyntaxUID)
+}
+
+// readNativeFrame reads and returns only a single Native frame from a decoder. This may seem odd but is actually useful.
+func readNativeFrame(d *dicomio.Decoder, parsedData *DataSet, frameIndex int) (pixelData *PixelDataInfo, err error) {
+	// TODO: eliminate copy and paste extraction of info below
+	image := PixelDataInfo{
+		IsEncapsulated: false,
+	}
+
+	// Parse information from previously parsed attributes that are needed to parse NativeData Frames:
+	rows, err := parsedData.FindElementByTag(dicomtag.Rows)
+	if err != nil {
+		return nil, err
+	}
+
+	cols, err := parsedData.FindElementByTag(dicomtag.Columns)
+	if err != nil {
+		return nil, err
+	}
+
+	nof, err := parsedData.FindElementByTag(dicomtag.NumberOfFrames)
+	nFrames := 0
+	if err == nil {
+		// No error, so parse number of frames
+		nFrames, err = strconv.Atoi(nof.MustGetString()) // odd that number of frames is encoded as a string...
+		if err != nil {
+			dicomlog.Vprintf(1, "ERROR converting nof")
+			return nil, err
+		}
+	} else {
+		// error fetching NumberOfFrames, so default to 1. TODO: revisit
+		nFrames = 1
+	}
+
+	b, err := parsedData.FindElementByTag(dicomtag.BitsAllocated)
+	if err != nil {
+		dicomlog.Vprintf(1, "ERROR finding bits allocated.")
+		return nil, err
+	}
+	bitsAllocated := int(b.MustGetUInt16())
+
+	s, err := parsedData.FindElementByTag(dicomtag.SamplesPerPixel)
+	if err != nil {
+		dicomlog.Vprintf(1, "ERROR finding samples per pixel")
+	}
+	samplesPerPixel := int(s.MustGetUInt16())
+
+	pixelsPerFrame := int(rows.MustGetUInt16()) * int(cols.MustGetUInt16())
+
+	if nFrames <= frameIndex || frameIndex < 0 {
+		return nil, errors.New("requested Frame Index out of bounds")
+	}
+
+	bytesPerFrame := bitsAllocated * samplesPerPixel * pixelsPerFrame / 8
+	// skipBytes is the number of bytes (frames) to skip over before the frame we wish to extract
+	skipBytes := bytesPerFrame * frameIndex
+	d.Skip(skipBytes)
+	dicomlog.Vprintf(1, "%d", skipBytes)
+
+	// Read frame
+	currentFrame := Frame{
+		IsEncapsulated: false,
+		NativeData: NativeFrame{
+			BitsPerSample: bitsAllocated,
+			Rows:          int(rows.MustGetUInt16()),
+			Cols:          int(cols.MustGetUInt16()),
+			Data:          make([][]int, int(pixelsPerFrame)),
+		},
+	}
+
+	for pixel := 0; pixel < int(pixelsPerFrame); pixel++ {
+		currentPixel := make([]int, samplesPerPixel)
+		for value := 0; value < samplesPerPixel; value++ {
+			if bitsAllocated == 8 {
+				currentPixel[value] = int(d.ReadUInt8())
+			} else if bitsAllocated == 16 {
+				currentPixel[value] = int(d.ReadUInt16())
+			}
+		}
+		currentFrame.NativeData.Data[pixel] = currentPixel
+	}
+
+	image.Frames = make([]Frame, 1)
+	image.Frames[0] = currentFrame
+
+	// Skip the remaining bytes needed
+	finalSkipBytes := (bytesPerFrame * (nFrames - 1)) - skipBytes
+	d.Skip(finalSkipBytes)
+
+	return &image, nil
+
 }
 
 // readNativeFrames reads NativeData frames from a Decoder based on already parsed pixel information
