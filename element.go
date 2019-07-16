@@ -144,7 +144,7 @@ func MustNewElement(tag dicomtag.Tag, values ...interface{}) *Element {
 // element contains zero or >1 values, or the value is not a uint32.
 func (e *Element) GetUInt32() (uint32, error) {
 	if len(e.Value) != 1 {
-		return 0, fmt.Errorf("Found %decoder value(s) in getuint32 (expect 1): %v", len(e.Value), e)
+		return 0, fmt.Errorf("Found %d value(s) in getuint32 (expect 1): %v", len(e.Value), e)
 	}
 	v, ok := e.Value[0].(uint32)
 	if !ok {
@@ -166,7 +166,7 @@ func (e *Element) MustGetUInt32() uint32 {
 // element contains zero or >1 values, or the value is not a uint16.
 func (e *Element) GetUInt16() (uint16, error) {
 	if len(e.Value) != 1 {
-		return 0, fmt.Errorf("Found %decoder value(s) in getuint16 (expect 1): %v", len(e.Value), e)
+		return 0, fmt.Errorf("Found %d value(s) in getuint16 (expect 1): %v", len(e.Value), e)
 	}
 	v, ok := e.Value[0].(uint16)
 	if !ok {
@@ -188,7 +188,7 @@ func (e *Element) MustGetUInt16() uint16 {
 // element contains zero or >1 values, or the value is not a string.
 func (e *Element) GetString() (string, error) {
 	if len(e.Value) != 1 {
-		return "", fmt.Errorf("Found %decoder value(s) in getstring (expect 1): %v", len(e.Value), e.String())
+		return "", fmt.Errorf("Found %d value(s) in getstring (expect 1): %v", len(e.Value), e.String())
 	}
 	v, ok := e.Value[0].(string)
 	if !ok {
@@ -287,7 +287,7 @@ func elementString(e *Element, nestLevel int) string {
 	}
 	s = fmt.Sprintf("%s %s %s %s ", s, dicomtag.DebugString(e.Tag), e.VR, sVl)
 	if e.VR == "SQ" || e.Tag == dicomtag.Item {
-		s += fmt.Sprintf(" (#%decoder)[\n", len(e.Value))
+		s += fmt.Sprintf(" (#%d)[\n", len(e.Value))
 		for _, v := range e.Value {
 			s += elementString(v.(*Element), nestLevel+1) + "\n"
 		}
@@ -297,7 +297,7 @@ func elementString(e *Element, nestLevel int) string {
 		if len(e.Value) == 1 {
 			sv = fmt.Sprintf("%v", e.Value)
 		} else {
-			sv = fmt.Sprintf("(%decoder)%v", len(e.Value), e.Value)
+			sv = fmt.Sprintf("(%d)%v", len(e.Value), e.Value)
 		}
 		if len(sv) > 1024 {
 			sv = sv[1:1024] + "(...)"
@@ -376,11 +376,11 @@ func (data PixelDataInfo) String() string {
 	for i := 0; i < len(data.Frames); i++ {
 		if data.Frames[i].IsEncapsulated {
 			csum := sha256.Sum256(data.Frames[i].EncapsulatedData.Data)
-			s += fmt.Sprintf("%decoder:{size:%decoder, csum:%v, encapsulated:true}, ",
+			s += fmt.Sprintf("%d:{size:%d, csum:%v, encapsulated:true}, ",
 				i, len(data.Frames[i].EncapsulatedData.Data),
 				base64.URLEncoding.EncodeToString(csum[:]))
 		} else {
-			s += fmt.Sprintf("%decoder:{size:%decoder, encapsulated: false}, ",
+			s += fmt.Sprintf("%d:{size:%d, encapsulated: false}, ",
 				i, len(data.Frames[i].NativeData.Data))
 		}
 	}
